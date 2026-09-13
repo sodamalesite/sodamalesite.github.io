@@ -71,6 +71,8 @@
         .form-group input, .form-group select { background: #07080c; border: 1px solid var(--border-color); padding: 12px; border-radius: 8px; color: #fff; font-size: 0.9rem; }
         .form-group input:focus { border-color: var(--accent-yellow); outline: none; box-shadow: 0 0 8px var(--yellow-glow); }
         .btn-submit { background-color: var(--accent-yellow); color: #000; border: none; padding: 14px; border-radius: 8px; font-weight: 700; text-transform: uppercase; cursor: pointer; margin-top: 10px; }
+        
+        .loading { text-align: center; padding: 40px; color: var(--text-muted); font-size: 1rem; }
     </style>
 </head>
 <body>
@@ -117,14 +119,39 @@
         
         <main>
             <h2 class="section-title">Модификации</h2>
-            <div id="modsGrid" class="portfolio-grid"></div>
+            <div id="modsGrid" class="portfolio-grid">
+                <div class="loading">Загрузка...</div>
+            </div>
 
             <h2 class="section-title">Видеоматериалы</h2>
-            <div id="videosGrid" class="portfolio-grid"></div>
+            <div id="videosGrid" class="portfolio-grid">
+                <div class="loading">Загрузка...</div>
+            </div>
         </main>
     </div>
 
+    <!-- Firebase SDK (compat версия - работает как обычный скрипт) -->
+    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
+
     <script>
+        // === FIREBASE КОНФИГ (твой) ===
+        const firebaseConfig = {
+            apiKey: "AIzaSyDRpHx7qFTovQC5-13F4UKbxqAFBruDkyc",
+            authDomain: "sodamalesite.firebaseapp.com",
+            databaseURL: "https://sodamalesite-default-rtdb.firebaseio.com",
+            projectId: "sodamalesite",
+            storageBucket: "sodamalesite.firebasestorage.app",
+            messagingSenderId: "452781227818",
+            appId: "1:452781227818:web:cc63b353f6cc26fec56853"
+        };
+
+        // Инициализация Firebase
+        firebase.initializeApp(firebaseConfig);
+        const db = firebase.database();
+        const contentRef = db.ref('items');
+
+        // Начальные данные (добавятся в базу только если она пустая)
         const initialContent = [
             {
                 type: 'mod',
@@ -142,6 +169,7 @@
         ];
 
         let isAdmin = false;
+        let allItems = []; // Массив всех карточек из Firebase
 
         function toggleFormFields() {
             const type = document.getElementById('contentType').value;
@@ -159,12 +187,10 @@
 
         // --- ЗАШИФРОВАННАЯ ПРОВЕРКА ПАРОЛЯ ---
         function checkPassword(input) {
-            // Массив зашифрованных символов (это "111111", зашифрованный XOR-ключом 0x55)
             const encrypted = [0x64, 0x64, 0x64, 0x64, 0x64, 0x64];
             const key = 0x55;
             let decrypted = "";
             
-            // Расшифровываем на лету и сравниваем
             for (let i = 0; i < encrypted.length; i++) {
                 decrypted += String.fromCharCode(encrypted[i] ^ key);
             }
@@ -175,7 +201,6 @@
             if (window.location.hash === '#admin') {
                 const password = prompt('Вход в защищенную зону. Введите пароль администратора:');
                 
-                // Проверяем зашифрованный пароль
                 if (password !== null && checkPassword(password)) {
                     isAdmin = true;
                     document.getElementById('adminPanel').style.display = 'block';
@@ -192,67 +217,93 @@
         window.addEventListener('hashchange', checkUrlRoute);
         window.addEventListener('load', checkUrlRoute);
 
-        function renderContent() {
-            let currentData = localStorage.getItem('sodamale_portfolio');
-            if (!currentData) {
-                localStorage.setItem('sodamale_portfolio', JSON.stringify(initialContent));
-                currentData = JSON.stringify(initialContent);
+        // === ЧИТАЕМ ДАННЫЕ ИЗ FIREBASE В РЕАЛЬНОМ ВРЕМЕНИ ===
+        contentRef.on('value', (snapshot) => {
+            const data = snapshot.val();
+            allItems = [];
+            
+            if (data) {
+                // Преобразуем объект Firebase в массив
+                Object.keys(data).forEach(key => {
+                    allItems.push({ id: key, ...data[key] });
+                });
+                
+                // Сортируем: новые сверху (по убыванию ключа)
+                allItems.sort((a, b) => b.id.localeCompare(a.id));
+            } else {
+                // Если база пустая - добавляем начальные данные
+                initialContent.forEach(item => {
+                    contentRef.push(item);
+                });
             }
             
-            const items = JSON.parse(currentData);
+            renderContent();
+        });
+
+        // === ОТРИСОВКА КАРТОЧЕК ===
+        function renderContent() {
             const modsGrid = document.getElementById('modsGrid');
             const videosGrid = document.getElementById('videosGrid');
             
             modsGrid.innerHTML = '';
             videosGrid.innerHTML = '';
 
-            items.forEach((item, index) => {
-                const deleteBtn = isAdmin ? `<button onclick="deleteItem(${index}); event.stopPropagation();" style="background:#ff0055; color:#fff; border:none; padding:5px 10px; border-radius:4px; font-size:0.75rem; cursor:pointer; margin-top:10px; font-weight:bold; align-self:flex-start;">❌ Удалить</button>` : '';
+            const mods = allItems.filter(item => item.type === 'mod');
+            const videos = allItems.filter(item => item.type === 'video');
 
-                if (item.type === 'mod') {
-                    modsGrid.innerHTML += `
-                        <div class="project-card" onclick="window.open('${item.url}', '_blank')">
-                            <div class="mod-thumb">
-                                <img src="${item.img || item.url}" alt="Mod Image">
-                            </div>
-                            <div class="card-body">
-                                <span class="card-tag">GameBanana</span>
-                                <h3>${item.title}</h3>
-                                <p>${item.desc}</p>
-                                ${deleteBtn}
+            if (mods.length === 0) modsGrid.innerHTML = '<div class="loading">Пока нет модификаций</div>';
+            if (videos.length === 0) videosGrid.innerHTML = '<div class="loading">Пока нет видео</div>';
+
+            mods.forEach(item => {
+                const deleteBtn = isAdmin ? `<button onclick="deleteItem('${item.id}'); event.stopPropagation();" style="background:#ff0055; color:#fff; border:none; padding:5px 10px; border-radius:4px; font-size:0.75rem; cursor:pointer; margin-top:10px; font-weight:bold; align-self:flex-start;">❌ Удалить</button>` : '';
+
+                modsGrid.innerHTML += `
+                    <div class="project-card" onclick="window.open('${item.url}', '_blank')">
+                        <div class="mod-thumb">
+                            <img src="${item.img || item.url}" alt="Mod Image">
+                        </div>
+                        <div class="card-body">
+                            <span class="card-tag">GameBanana</span>
+                            <h3>${item.title}</h3>
+                            <p>${item.desc}</p>
+                            ${deleteBtn}
+                        </div>
+                    </div>
+                `;
+            });
+
+            videos.forEach(item => {
+                const deleteBtn = isAdmin ? `<button onclick="deleteItem('${item.id}'); event.stopPropagation();" style="background:#ff0055; color:#fff; border:none; padding:5px 10px; border-radius:4px; font-size:0.75rem; cursor:pointer; margin-top:10px; font-weight:bold; align-self:flex-start;">❌ Удалить</button>` : '';
+
+                videosGrid.innerHTML += `
+                    <div class="project-card" onclick="window.open('https://www.youtube.com/watch?v=${item.url}', '_blank')">
+                        <div class="video-thumb">
+                            <div class="thumb-content">
+                                <div class="thumb-icon">🎬</div>
+                                <div class="thumb-label">YouTube Видео</div>
                             </div>
                         </div>
-                    `;
-                } else if (item.type === 'video') {
-                    videosGrid.innerHTML += `
-                        <div class="project-card" onclick="window.open('https://www.youtube.com/watch?v=${item.url}', '_blank')">
-                            <div class="video-thumb">
-                                <div class="thumb-content">
-                                    <div class="thumb-icon">🎬</div>
-                                    <div class="thumb-label">YouTube Видео</div>
-                                </div>
-                            </div>
-                            <div class="card-body">
-                                <span class="card-tag" style="color: #ff0055;">YouTube Видео</span>
-                                <h3>${item.title}</h3>
-                                <p>${item.desc}</p>
-                                ${deleteBtn}
-                            </div>
+                        <div class="card-body">
+                            <span class="card-tag" style="color: #ff0055;">YouTube Видео</span>
+                            <h3>${item.title}</h3>
+                            <p>${item.desc}</p>
+                            ${deleteBtn}
                         </div>
-                    `;
-                }
+                    </div>
+                `;
             });
         }
 
-        window.deleteItem = function(index) {
+        // === УДАЛЕНИЕ ИЗ FIREBASE ===
+        window.deleteItem = function(id) {
             if (confirm('Вы уверены, что хотите удалить эту карточку?')) {
-                const currentData = JSON.parse(localStorage.getItem('sodamale_portfolio'));
-                currentData.splice(index, 1);
-                localStorage.setItem('sodamale_portfolio', JSON.stringify(currentData));
-                renderContent();
+                contentRef.child(id).remove()
+                    .then(() => alert('Удалено!'))
+                    .catch(err => alert('Ошибка: ' + err.message));
             }
         };
 
+        // === ДОБАВЛЕНИЕ В FIREBASE ===
         function addNewContent() {
             const type = document.getElementById('contentType').value;
             const title = document.getElementById('contentTitle').value;
@@ -269,27 +320,25 @@
                 return;
             }
 
-            const currentData = JSON.parse(localStorage.getItem('sodamale_portfolio'));
-            
-            // unshift добавляет элемент в НАЧАЛО массива (новые карточки будут сверху)
-            if (type === 'mod') {
-                currentData.unshift({ type, title, desc, url, img });
-            } else {
-                currentData.unshift({ type, title, desc, url });
-            }
-            
-            localStorage.setItem('sodamale_portfolio', JSON.stringify(currentData));
-            
-            document.getElementById('contentTitle').value = '';
-            document.getElementById('contentDesc').value = '';
-            document.getElementById('contentUrl').value = '';
-            document.getElementById('contentImg').value = '';
-            
-            renderContent();
-            alert('Контент успешно обновлен!');
-        }
+            const newItem = {
+                type: type,
+                title: title,
+                desc: desc,
+                url: url,
+                img: type === 'mod' ? img : null,
+                createdAt: firebase.database.ServerValue.TIMESTAMP
+            };
 
-        renderContent();
+            contentRef.push(newItem)
+                .then(() => {
+                    document.getElementById('contentTitle').value = '';
+                    document.getElementById('contentDesc').value = '';
+                    document.getElementById('contentUrl').value = '';
+                    document.getElementById('contentImg').value = '';
+                    alert('Контент успешно опубликован!');
+                })
+                .catch(err => alert('Ошибка: ' + err.message));
+        }
     </script>
 </body>
 </html>
